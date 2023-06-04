@@ -16,6 +16,7 @@ bool tryDequeue(void**);
 size_t size(void);
 size_t waiting(void);
 size_t visited(void);
+void freeQueue(void);
 
 typedef struct qNode{
     struct qNode * next;
@@ -25,16 +26,17 @@ typedef struct qNode{
 typedef struct Queue{
     struct qNode * head;
     struct qNode * tail;
-    int size;
+    size_t size;
 } Queue;
 
 typedef struct tNode{
     struct tNode * next;
     thrd_t tid;
+    cnd_t waitItem;
 } tNode;
 
 typedef struct ThreadQueue{
     struct tNode * head;
     struct tNode * tail;
-    int size;
+    size_t size;
 } ThreadQueue;
