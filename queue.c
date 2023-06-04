@@ -1,4 +1,36 @@
 #include "queue.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <threads.h>
+#include <stdatomic.h>
+
+void freeQueue(void);
+
+typedef struct qNode{
+    struct qNode * next;
+    void * value;
+} qNode;
+
+typedef struct Queue{
+    struct qNode * head;
+    struct qNode * tail;
+    size_t size;
+} Queue;
+
+typedef struct tNode{
+    struct tNode * next;
+    thrd_t tid;
+    cnd_t waitItem;
+} tNode;
+
+typedef struct ThreadQueue{
+    struct tNode * head;
+    struct tNode * tail;
+    size_t size;
+} ThreadQueue;
+
 
 static Queue *queue;
 static ThreadQueue *threadQueue;
@@ -37,14 +69,14 @@ void enqueue(void *item) {
     if (queue->head == NULL) {
         queue->head = newNode;
         queue->tail = newNode;
-        if (threadQueue->size > 0) { // If there are waiting threads, wake up the first in line to process the new item.
-            cnd_signal(&(threadQueue->head->waitItem));
-        }
+
     } else {
         queue->tail->next = newNode;
         queue->tail = newNode;
     }
-
+    if (threadQueue->size > 0) { // If there are waiting threads, wake up the first in line to process the new item.
+        cnd_signal(&(threadQueue->head->waitItem));
+    }
     mtx_unlock(&qlock);
 }
 
