@@ -103,7 +103,7 @@ void *dequeue(void) {
         mtx_lock(&tlock);
         tNode *first = threadQueue->head; // Remove the current thread from the thread queue. If we woke up it means an item is ready
         threadQueue->head = first->next;
-        if (threadQueue->head = NULL) {
+        if (threadQueue->head == NULL) {
             threadQueue->tail = NULL;
         }
         threadQueue->size = threadQueue->size - 1;
@@ -114,7 +114,7 @@ void *dequeue(void) {
         qNode *qfirst = queue->head;
         item = qfirst->value;
         queue->head = qfirst->next;
-        if (queue->head = NULL) {
+        if (queue->head == NULL) {
             queue->tail = NULL;
         }
         queue->size = queue->size - 1;
@@ -127,7 +127,7 @@ void *dequeue(void) {
     qNode *qfirst = queue->head;
     item = qfirst->value;
     queue->head = qfirst->next;
-    if (queue->head = NULL) {
+    if (queue->head == NULL) {
         queue->tail = NULL;
     }
     queue->size = queue->size - 1;
@@ -144,7 +144,7 @@ bool tryDequeue(void **arg) {
         return false;
     }
     qNode *first = queue->head;
-    arg = first->value;
+    *arg = first->value;
     queue->head = queue->head->next;
     if (queue->head == NULL) {
         queue->tail = NULL;
@@ -152,7 +152,9 @@ bool tryDequeue(void **arg) {
     queue->size = queue->size - 1;
     free(first);
     times_visited++;
+
     mtx_unlock(&qlock);
+
     return true;
 }
 
