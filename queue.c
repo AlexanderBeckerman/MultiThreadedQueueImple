@@ -7,6 +7,7 @@
 #include <stdatomic.h>
 
 void freeQueue(void);
+void * removeItemFromQueue(int index);
 
 typedef struct qNode{
     struct qNode * next;
@@ -17,6 +18,7 @@ typedef struct Queue{
     struct qNode * head;
     struct qNode * tail;
     size_t size;
+    int empty;
 } Queue;
 
 typedef struct tNode{
@@ -38,12 +40,14 @@ static mtx_t qlock;
 static mtx_t tlock;
 static size_t times_visited;
 
+
 void initQueue(void) {
     queue = (Queue *) malloc(sizeof(Queue));
     threadQueue = (ThreadQueue *) malloc(sizeof(ThreadQueue));
     queue->head = NULL;
     queue->tail = NULL;
     queue->size = 0;
+    queue->empty = 1;
     threadQueue->head = NULL;
     threadQueue->tail = NULL;
     threadQueue->size = 0;
@@ -74,7 +78,8 @@ void enqueue(void *item) {
         queue->tail->next = newNode;
         queue->tail = newNode;
     }
-    if (threadQueue->size > 0) { // If there are waiting threads, wake up the first in line to process the new item.
+    if (threadQueue->size > 0 && queue->empty == 1) { // If there are waiting threads, wake up the first in line to process the new item.
+        queue->empty = 0;
         cnd_signal(&(threadQueue->head->waitItem));
     }
     mtx_unlock(&qlock);
@@ -83,7 +88,7 @@ void enqueue(void *item) {
 void *dequeue(void) {
     mtx_lock(&qlock);
     void *item;
-    if (queue->head == NULL) {
+    if (queue->head == NULL || queue->size <= threadQueue->size) {
         mtx_lock(&tlock);
         tNode *newNode = (tNode *) malloc(sizeof(tNode)); // Add the current thread to the waiting threads queue
         newNode->tid = thrd_current();
@@ -99,16 +104,7 @@ void *dequeue(void) {
         }
         mtx_unlock(&tlock);
         cnd_wait(&(newNode->waitItem),
-                 &qlock); // Wait for a new item to be added (every enqueue we signal the top of the thread queue)
-        mtx_lock(&tlock);
-        tNode *first = threadQueue->head; // Remove the current thread from the thread queue. If we woke up it means an item is ready
-        threadQueue->head = first->next;
-        if (threadQueue->head == NULL) {
-            threadQueue->tail = NULL;
-        }
-        threadQueue->size = threadQueue->size - 1;
-        free(first);
-        mtx_unlock(&tlock);
+                 &qlock); // Wait for a new item to be added
 
         // Remove the item from the main queue with the current thread
         qNode *qfirst = queue->head;
@@ -118,20 +114,33 @@ void *dequeue(void) {
             queue->tail = NULL;
         }
         queue->size = queue->size - 1;
+        if (queue->size == 0){
+            queue->empty = 1;
+        }
         free(qfirst);
+
+        mtx_lock(&tlock);
+        tNode *first = threadQueue->head; // Remove the current thread from the thread queue. If we woke up it means an item is ready
+        threadQueue->head = first->next;
+        if (threadQueue->head == NULL) {
+            threadQueue->tail = NULL;
+        }
+        threadQueue->size = threadQueue->size - 1;
+        free(first);
+        mtx_unlock(&tlock);
+        if (queue->size > 0 && threadQueue->size > 0){
+            cnd_signal(&(threadQueue->head->waitItem));
+        }
         times_visited++;
         mtx_unlock(&qlock);
         return item;
     }
     // Else queue is not empty we can just remove the item
-    qNode *qfirst = queue->head;
-    item = qfirst->value;
-    queue->head = qfirst->next;
+    int index = threadQueue->size;
+    item = removeItemFromQueue(index);
     if (queue->head == NULL) {
         queue->tail = NULL;
     }
-    queue->size = queue->size - 1;
-    free(qfirst);
     times_visited++;
     mtx_unlock(&qlock);
     return item;
@@ -139,18 +148,15 @@ void *dequeue(void) {
 
 bool tryDequeue(void **arg) {
     mtx_lock(&qlock);
-    if (queue->size == 0 || threadQueue->size > queue->size) {
+    if (queue->size == 0 || threadQueue->size >= queue->size) {
         mtx_unlock(&qlock);
         return false;
     }
-    qNode *first = queue->head;
-    *arg = first->value;
-    queue->head = queue->head->next;
+    int index = threadQueue->size;
+    *arg = removeItemFromQueue(index);
     if (queue->head == NULL) {
         queue->tail = NULL;
     }
-    queue->size = queue->size - 1;
-    free(first);
     times_visited++;
 
     mtx_unlock(&qlock);
@@ -190,4 +196,32 @@ void freeQueue(void) {
         free(temp2);
     }
     free(threadQueue);
+}
+
+void * removeItemFromQueue(int index){
+    qNode* current = queue->head;
+    qNode* previous = NULL;
+    int i = 0;
+    void * ret = NULL;
+    while (current != NULL) {
+        if (i == index) {
+            if (previous == NULL) {
+                queue->head = current->next;
+            } else {
+                previous->next = current->next;
+            }
+            if (current == queue->tail) {
+                queue->tail = previous;
+            }
+            ret = current->value;
+            free(current);
+            break;
+        }
+        previous = current;
+        current = current->next;
+        i++;
+    }
+    queue->size = queue->size - 1;
+    return ret;
+
 }
