@@ -4,41 +4,41 @@
 #include <unistd.h>
 #include <string.h>
 #include <threads.h>
-#include <stdatomic.h>
 
-void freeQueue(void);
-void * removeItemFromQueue(int index);
+void freeQueue(void); // Free the queue memory
+void *removeItemFromQueue(int index); // Removes an item from the queue at a specific index.
+        // Useful for when we have enough items at the queue, but we want to save the index amount of items to sleeping threads
 
-typedef struct qNode{
-    struct qNode * next;
-    void * value;
+typedef struct qNode { // Node for main queue
+    struct qNode *next;
+    void *value;
 } qNode;
 
-typedef struct Queue{
-    struct qNode * head;
-    struct qNode * tail;
+typedef struct Queue { // Struct representing our main queue
+    struct qNode *head;
+    struct qNode *tail;
     size_t size;
-    int empty;
+    int empty; // A flag to keep track when to wake up a new thread
 } Queue;
 
-typedef struct tNode{
-    struct tNode * next;
+typedef struct tNode { // Node for the thread queue
+    struct tNode *next;
     thrd_t tid;
-    cnd_t waitItem;
+    cnd_t waitItem; // Condition variable for the thread. Uses it when it arrives at an empty queue
 } tNode;
 
-typedef struct ThreadQueue{
-    struct tNode * head;
-    struct tNode * tail;
+typedef struct ThreadQueue { // Struct representing the thread queue
+    struct tNode *head;
+    struct tNode *tail;
     size_t size;
 } ThreadQueue;
 
 
-static Queue *queue;
-static ThreadQueue *threadQueue;
-static mtx_t qlock;
-static mtx_t tlock;
-static size_t times_visited;
+static Queue *queue; // Our main queue
+static ThreadQueue *threadQueue; // Secondary queue to track the sleeping threads
+static mtx_t qlock; // Lock for the main queue
+static mtx_t tlock; // Lock for the thread queue
+static size_t times_visited; // Counter to keep track for the visited() function
 
 
 void initQueue(void) {
@@ -60,7 +60,7 @@ void destroyQueue(void) {
 
     mtx_destroy(&qlock);
     mtx_destroy(&tlock);
-    freeQueue();
+    freeQueue(); // Frees both queues and destroys the condition variables inside the queue
 
 }
 
@@ -78,9 +78,10 @@ void enqueue(void *item) {
         queue->tail->next = newNode;
         queue->tail = newNode;
     }
-    if (threadQueue->size > 0 && queue->empty == 1) { // If there are waiting threads, wake up the first in line to process the new item.
+    if (threadQueue->size > 0 &&
+        queue->empty == 1) { // If there are waiting threads, wake up the first in line to process the new item.
         queue->empty = 0;
-        cnd_signal(&(threadQueue->head->waitItem));
+        cnd_signal(&(threadQueue->head->waitItem)); // Wake up the thread that went to sleep first
     }
     mtx_unlock(&qlock);
 }
@@ -88,7 +89,7 @@ void enqueue(void *item) {
 void *dequeue(void) {
     mtx_lock(&qlock);
     void *item;
-    if (queue->head == NULL || queue->size <= threadQueue->size) {
+    if (queue->head == NULL || queue->size <= threadQueue->size) { // If the queue is empty
         mtx_lock(&tlock);
         tNode *newNode = (tNode *) malloc(sizeof(tNode)); // Add the current thread to the waiting threads queue
         newNode->tid = thrd_current();
@@ -114,13 +115,13 @@ void *dequeue(void) {
             queue->tail = NULL;
         }
         queue->size = queue->size - 1;
-        if (queue->size == 0){
-            queue->empty = 1;
+        if (queue->size == 0) {
+            queue->empty = 1; // If the queue is empty, we want to wake up a new thread next enqueue
         }
         free(qfirst);
 
         mtx_lock(&tlock);
-        tNode *first = threadQueue->head; // Remove the current thread from the thread queue. If we woke up it means an item is ready
+        tNode *first = threadQueue->head; // Remove the current thread from the thread queue after we removed an item
         threadQueue->head = first->next;
         if (threadQueue->head == NULL) {
             threadQueue->tail = NULL;
@@ -128,17 +129,18 @@ void *dequeue(void) {
         threadQueue->size = threadQueue->size - 1;
         free(first);
         mtx_unlock(&tlock);
-        if (queue->size > 0 && threadQueue->size > 0){
+        if (queue->size > 0 && threadQueue->size > 0) { // Wake up the next thread in line to handle the available item
             cnd_signal(&(threadQueue->head->waitItem));
         }
         times_visited++;
         mtx_unlock(&qlock);
         return item;
     }
-    // Else queue is not empty we can just remove the item
+    // Else queue is not empty, so we remove the item that doesnt belong to any other (sleeping or not) thread
     int index = threadQueue->size;
     item = removeItemFromQueue(index);
     if (queue->head == NULL) {
+        queue->empty = 1;
         queue->tail = NULL;
     }
     times_visited++;
@@ -148,13 +150,14 @@ void *dequeue(void) {
 
 bool tryDequeue(void **arg) {
     mtx_lock(&qlock);
-    if (queue->size == 0 || threadQueue->size >= queue->size) {
+    if (queue->size == 0 || threadQueue->size >= queue->size) { // Queue is empty
         mtx_unlock(&qlock);
-        return false;
+        return false; // Don't go to sleep and wait for an item, immediately return.
     }
     int index = threadQueue->size;
-    *arg = removeItemFromQueue(index);
+    *arg = removeItemFromQueue(index); // Get the returned item inside arg
     if (queue->head == NULL) {
+        queue->empty = 1;
         queue->tail = NULL;
     }
     times_visited++;
@@ -198,11 +201,11 @@ void freeQueue(void) {
     free(threadQueue);
 }
 
-void * removeItemFromQueue(int index){
-    qNode* current = queue->head;
-    qNode* previous = NULL;
+void *removeItemFromQueue(int index) {
+    qNode *current = queue->head;
+    qNode *previous = NULL;
     int i = 0;
-    void * ret = NULL;
+    void *ret = NULL;
     while (current != NULL) {
         if (i == index) {
             if (previous == NULL) {
