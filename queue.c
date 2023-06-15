@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <threads.h>
+#include <stdatomic.h>
 
 void freeQueue(void); // Free the queue memory
 void *removeItemFromQueue(int index); // Removes an item from the queue at a specific index.
@@ -17,7 +18,7 @@ typedef struct qNode { // Node for main queue
 typedef struct Queue { // Struct representing our main queue
     struct qNode *head;
     struct qNode *tail;
-    size_t size;
+    atomic_int size;
     int empty; // A flag to keep track when to wake up a new thread
 } Queue;
 
@@ -30,7 +31,7 @@ typedef struct tNode { // Node for the thread queue
 typedef struct ThreadQueue { // Struct representing the thread queue
     struct tNode *head;
     struct tNode *tail;
-    size_t size;
+    atomic_int size;
 } ThreadQueue;
 
 
@@ -38,7 +39,7 @@ static Queue *queue; // Our main queue
 static ThreadQueue *threadQueue; // Secondary queue to track the sleeping threads
 static mtx_t qlock; // Lock for the main queue
 static mtx_t tlock; // Lock for the thread queue
-static size_t times_visited; // Counter to keep track for the visited() function. It is updated after every completed dequeue
+static atomic_int times_visited; // Counter to keep track for the visited() function. It is updated after every completed dequeue
 
 
 void initQueue(void) {
@@ -66,7 +67,7 @@ void destroyQueue(void) {
 
 void enqueue(void *item) {
     mtx_lock(&qlock);
-    queue->size = queue->size + 1; // First we insert the new item
+    queue->size++; // First we insert the new item
     qNode *newNode = (qNode *) malloc(sizeof(qNode));
     newNode->value = item;
     newNode->next = NULL;
@@ -80,8 +81,10 @@ void enqueue(void *item) {
     }
     if (threadQueue->size > 0 &&
         queue->empty == 1) { // If there are waiting threads, wake up the first in line to process the new item.
+        mtx_lock(&tlock);
         queue->empty = 0;
         cnd_signal(&(threadQueue->head->waitItem)); // Wake up the thread that went to sleep first
+        mtx_unlock(&tlock);
     }
     mtx_unlock(&qlock);
 }
@@ -96,7 +99,7 @@ void *dequeue(void) {
         newNode->tid = thrd_current();
         newNode->next = NULL;
         cnd_init(&(newNode->waitItem));
-        threadQueue->size = threadQueue->size + 1;
+        threadQueue->size++;
         if (threadQueue->head == NULL) {
             threadQueue->head = newNode;
             threadQueue->tail = newNode;
@@ -115,7 +118,7 @@ void *dequeue(void) {
         if (queue->head == NULL) {
             queue->tail = NULL;
         }
-        queue->size = queue->size - 1;
+        queue->size--;
         if (queue->size == 0) {
             queue->empty = 1; // If the queue is empty, we want to wake up a new thread next enqueue
         }
@@ -127,13 +130,14 @@ void *dequeue(void) {
         if (threadQueue->head == NULL) {
             threadQueue->tail = NULL;
         }
-        threadQueue->size = threadQueue->size - 1;
+        threadQueue->size--;
         free(first);
-        mtx_unlock(&tlock);
+
         if (queue->size > 0 && threadQueue->size > 0) { // Wake up the next thread in line to handle the available item
             cnd_signal(&(threadQueue->head->waitItem));
         }
         times_visited++;
+        mtx_unlock(&tlock);
         mtx_unlock(&qlock);
         return item;
     }
@@ -225,7 +229,7 @@ void *removeItemFromQueue(int index) { // Removes and returns an item at the giv
         current = current->next;
         i++;
     }
-    queue->size = queue->size - 1;
+    queue->size--;
     return ret;
 
 }
